@@ -1,0 +1,24 @@
+#!/bin/bash
+#
+# Per-machine settings.  Copy to config.local.sh (which is gitignored) and edit.
+# Sourced by setup.sh BEFORE the defaults are applied, so anything set here
+# wins over the defaults but still loses to variables already in your shell.
+#
+#     cp config.local.sh.example config.local.sh
+
+# Where your GENIE fork lives.  Default is a sibling of this repo:
+#   .../generators/{genie,eA_EG2_analysis}
+# EA_GENIE_TOP=/exp/uboone/app/users/$(whoami)/generators/genie
+
+# Splines.  Default ${EA_ROOT}/splines.  Point elsewhere if you keep the
+# xml outside the repo:
+# EA_SPLINEDIR=/exp/uboone/data/users/$(whoami)/eA/splines
+
+# Smaller test runs by default on a scratch checkout:
+# NEVENTS=50000
+
+# Physics config -- only override if you are deliberately running a variant.
+# Whatever is set here must match the tarball you submit with.
+# GVERSION=v3_06_02-q2min0p8
+# GTUNE=G18_10a_00_000
+# Q2MIN_GEN=0.80
