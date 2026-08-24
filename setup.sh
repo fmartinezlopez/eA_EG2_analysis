@@ -69,18 +69,104 @@ fi
 : "${EA_GENIE_TOP:=$(dirname "${EA_ROOT}")/genie}"
 
 # Grid artefacts
-: "${EA_TARBALL:=${EA_GRID}/ProdGENIE.tar.gz}"
+: "${EA_TARBALL:=${EA_GRID}/ProdBooNE.tar.gz}"
 : "${EA_RUNSCRIPT:=${EA_GRID}/run_grid_eA.sh}"
 : "${EA_GRID_SETUP:=${EA_GRID}/grid_setup.sh}"
 : "${EA_SEEDFILE:=${EA_GRID}/.seed_counter}"
 : "${EA_SEEDLOG:=${EA_GRID}/seed_ledger.txt}"
 
-# Where the grid job writes.  ${GRID_USER} is only defined on the worker node,
-# so the launcher just passes CAMPAIGN/TARGET_NAME and the job builds the path.
-: "${EA_SCRATCH:=/pnfs/uboone/scratch/users}"
-
 export EA_GRID EA_SPLINEDIR EA_INPUT EA_OUTPUT EA_GENIE_TOP
-export EA_TARBALL EA_RUNSCRIPT EA_GRID_SETUP EA_SEEDFILE EA_SEEDLOG EA_SCRATCH
+export EA_TARBALL EA_RUNSCRIPT EA_GRID_SETUP EA_SEEDFILE EA_SEEDLOG
+
+# ------------------------------------------------------------------ experiment profile
+#
+# Everything that ties this to one experiment lives here.  Switching should be
+#     export EA_EXPERIMENT=dune
+# and nothing else.  Six separate things are experiment-specific, and changing
+# only the jobsub group gives you a job that submits fine and then dies on the
+# worker node, so they are set together:
+#
+#   EA_GROUP              jobsub_submit -G
+#   EA_ROLE               jobsub_submit --role (empty = do not pass the flag)
+#   EA_SCRATCH            /pnfs base the job writes into
+#   EA_CVMFS_SETUP        the UPS/spack bootstrap grid_setup.sh sources
+#   EA_SINGULARITY_IMAGE  container the job runs in
+#   EA_CONDOR_REQS        --append_condor_requirements expression
+#   EA_USAGE_MODEL        --resource-provides=usage_model
+#
+# Any of them can be overridden individually after the profile is applied.
+
+: "${EA_EXPERIMENT:=uboone}"
+
+case "${EA_EXPERIMENT}" in
+
+  uboone)
+    : "${EA_GROUP:=uboone}"
+    : "${EA_ROLE:=}"
+    : "${EA_SCRATCH:=/pnfs/uboone/scratch/users}"
+    : "${EA_CVMFS_SETUP:=/cvmfs/uboone.opensciencegrid.org/products/setup_uboone_mcc9.sh}"
+    : "${EA_SINGULARITY_IMAGE:=/cvmfs/singularity.opensciencegrid.org/fermilab/fnal-dev-sl7:latest}"
+    : "${EA_USAGE_MODEL:=DEDICATED,OPPORTUNISTIC}"
+    : "${EA_CONDOR_REQS:=(TARGET.HAS_Singularity==true&&TARGET.HAS_CVMFS_larsoft_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser1_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser2_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser3_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser4_opensciencegrid_org==true)}"
+    ;;
+
+  dune)
+    : "${EA_GROUP:=dune}"
+    : "${EA_ROLE:=Analysis}"
+    : "${EA_SCRATCH:=/pnfs/dune/scratch/users}"
+    : "${EA_CVMFS_SETUP:=/cvmfs/dune.opensciencegrid.org/products/dune/setup_dune.sh}"
+    : "${EA_SINGULARITY_IMAGE:=/cvmfs/singularity.opensciencegrid.org/fermilab/fnal-dev-sl7:latest}"
+    : "${EA_USAGE_MODEL:=OPPORTUNISTIC,OFFSITE}"
+    : "${EA_CONDOR_REQS:=(TARGET.HAS_Singularity==true&&TARGET.HAS_CVMFS_dune_opensciencegrid_org==true&&TARGET.HAS_CVMFS_larsoft_opensciencegrid_org==true&&TARGET.CVMFS_dune_opensciencegrid_org_REVISION>=1105&&TARGET.HAS_CVMFS_fifeuser1_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser2_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser3_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser4_opensciencegrid_org==true)}"
+    ;;
+
+  *)
+    # Unknown experiment: no guessing.  Everything must be supplied explicitly,
+    # and we check below that it was.
+    ;;
+esac
+
+# Fail loudly rather than submitting a half-configured job.
+_ea_missing_profile=""
+for _v in EA_GROUP EA_SCRATCH EA_CVMFS_SETUP EA_SINGULARITY_IMAGE \
+          EA_USAGE_MODEL EA_CONDOR_REQS; do
+  [ -z "${!_v:-}" ] && _ea_missing_profile="${_ea_missing_profile} ${_v}"
+done
+if [ -n "${_ea_missing_profile}" ]; then
+  echo "WARNING: EA_EXPERIMENT='${EA_EXPERIMENT}' has no built-in profile and these"
+  echo "         are unset:${_ea_missing_profile}"
+  echo "         Set them in config.local.sh, or add a case to setup.sh."
+fi
+unset _v _ea_missing_profile
+
+# Define every profile variable even when unset, so consumers under `set -u`
+# fail with their own message rather than an "unbound variable" backtrace.
+# EA_ROLE may legitimately be empty (uboone), so it is not in the check above.
+: "${EA_GROUP:=}"
+: "${EA_ROLE:=}"
+: "${EA_SCRATCH:=}"
+: "${EA_CVMFS_SETUP:=}"
+: "${EA_SINGULARITY_IMAGE:=}"
+: "${EA_USAGE_MODEL:=}"
+: "${EA_CONDOR_REQS:=}"
+
+# Returns nonzero if the profile is incomplete. Scripts that submit call this.
+ea_require_profile() {
+  local missing="" v
+  for v in EA_GROUP EA_SCRATCH EA_CVMFS_SETUP EA_SINGULARITY_IMAGE \
+           EA_USAGE_MODEL EA_CONDOR_REQS; do
+    [ -z "${!v}" ] && missing="${missing} ${v}"
+  done
+  [ -z "${missing}" ] && return 0
+  echo "ERROR: experiment profile '${EA_EXPERIMENT}' is incomplete."   >&2
+  echo "       Unset:${missing}"                                        >&2
+  echo "       Add a case for it in setup.sh, or set them in"          >&2
+  echo "       config.local.sh. Known profiles: uboone, dune."          >&2
+  return 1
+}
+
+export EA_EXPERIMENT EA_GROUP EA_ROLE EA_SCRATCH EA_CVMFS_SETUP
+export EA_SINGULARITY_IMAGE EA_USAGE_MODEL EA_CONDOR_REQS
 
 # ------------------------------------------------------------------ physics config
 #
@@ -158,6 +244,35 @@ ea_spline_file() {
 
 ea_spline_path() {
   echo "${EA_SPLINEDIR}/$(ea_spline_file)"
+}
+
+# ------------------------------------------------------------------ tarball
+# Is NAME present at the TOP LEVEL of TARBALL?
+#
+# Top level specifically: the grid job opens ${INPUT_TAR_DIR_LOCAL}/<name>, so
+# a copy buried in a subdirectory is not a pass.
+#
+# Returns 0 found, 1 not found, 2 the tarball could not be read.
+ea_tarball_has_toplevel() {
+  local tarball="$1" name="$2" listing entry
+  listing=$(tar -tzf "${tarball}" 2>/dev/null) || return 2
+  [ -n "${listing}" ] || return 2
+  # A here-string, not a pipe: any reader that stops at the first match sends
+  # SIGPIPE to the writer, and pipefail then reports the whole check as failed.
+  while IFS= read -r entry; do
+    entry="${entry#./}"                # tolerate a ./ prefix
+    entry="${entry%/}"                 # tolerate a trailing / on directories
+    [ "${entry}" = "${name}" ] && return 0
+  done <<< "${listing}"
+  return 1
+}
+
+# Top-level entries, for error messages that actually help.
+ea_tarball_toplevel() {
+  tar -tzf "$1" 2>/dev/null \
+    | sed 's#^\./##' \
+    | awk -F/ 'NF==1 && $1!="" {print $1}' \
+    | sort -u
 }
 
 # ------------------------------------------------------------------ GENIE
@@ -268,6 +383,8 @@ ea_config() {
 --------------------------------------------------------------
  eA-vA EG2 analysis environment
 --------------------------------------------------------------
+ experiment  : ${EA_EXPERIMENT}   (group ${EA_GROUP}${EA_ROLE:+, role ${EA_ROLE}})
+ scratch     : ${EA_SCRATCH}
  root        : ${EA_ROOT}
  grid        : ${EA_GRID}
  splines     : ${EA_SPLINEDIR}

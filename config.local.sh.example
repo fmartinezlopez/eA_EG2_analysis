@@ -22,3 +22,16 @@
 # GVERSION=v3_06_02-q2min0p8
 # GTUNE=G18_10a_00_000
 # Q2MIN_GEN=0.80
+
+# --- experiment -------------------------------------------------------------
+# Selects the grid submission profile: jobsub group and role, /pnfs scratch
+# base, CVMFS bootstrap, container image, condor requirements, usage model.
+# Built-in profiles: uboone (default), dune.
+# EA_EXPERIMENT=dune
+
+# Individual overrides win over the profile. Useful for one-off tests:
+# EA_GROUP=uboone
+# EA_ROLE=Analysis
+# EA_SCRATCH=/pnfs/uboone/persistent/users
+# EA_USAGE_MODEL=OPPORTUNISTIC
+# EA_SINGULARITY_IMAGE=/cvmfs/singularity.opensciencegrid.org/fermilab/fnal-wn-el9:latest

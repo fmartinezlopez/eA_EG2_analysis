@@ -31,17 +31,19 @@ DRYRUN="${3:-}"
 # ------------------------------------------------------------------ config
 EA_QUIET=1
 # shellcheck disable=SC1091
-. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/source.sh"
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/setup.sh"
 
 if [ -z "${TARGET_NAME}" ]; then
   echo "usage: $0 <$(echo ${EA_TARGETS} | tr ' ' '|')> <njobs> [--dry-run]"; exit 1
 fi
 
+ea_require_profile || exit 1
+
 TARGET_PDG="$(ea_target_pdg "${TARGET_NAME}")" || {
   echo "unknown target ${TARGET_NAME} (known: ${EA_TARGETS})"; exit 1; }
 export TARGET_NAME TARGET_PDG
 
-# Resources are per-target defaults from source.sh, still overridable ad hoc.
+# Resources are per-target defaults from setup.sh, still overridable ad hoc.
 LIFETIME="${LIFETIME:-$(ea_target_lifetime "${TARGET_NAME}")}"
 MEM="${MEM:-$(ea_target_memory "${TARGET_NAME}")}"
 
@@ -63,9 +65,45 @@ SEEDFILE="${EA_SEEDFILE}"
 SEEDLOG="${EA_SEEDLOG}"
 
 # ------------------------------------------------------------------ seeds
-[ -f "${SEEDFILE}" ] || echo 1000000 > "${SEEDFILE}"
-SEED_BASE=$(cat "${SEEDFILE}")
-NEXT=$(( SEED_BASE + NJOBS + 1000 ))     # gap so overlapping ranges cannot overlap
+#
+# Two files, different jobs:
+#
+#   seed_ledger.txt  IS COMMITTED.  Append-only provenance, and the source of
+#                    truth for which ranges are spent.
+#   .seed_counter    IS GITIGNORED.  A cache, so the common path is one `cat`.
+#
+# The base is the highest of: the configured start, the counter, and one gap
+# past the largest range end in the ledger.  That last term is what makes the
+# counter safe to gitignore -- a fresh clone, a rolled-back checkout or a
+# corrupt counter cannot reissue a range the ledger already records.
+: "${EA_SEED_START:=1000000}"
+: "${EA_SEED_GAP:=1000}"
+
+ledger_max=0
+if [ -s "${SEEDLOG}" ]; then
+  # field 6 is the range END written by the ledger append at the bottom
+  ledger_max=$(awk -F'\t' '$6 ~ /^[0-9]+$/ && $6+0 > m {m=$6+0} END {print m+0}' "${SEEDLOG}")
+fi
+
+file_base=0
+if [ -f "${SEEDFILE}" ]; then
+  file_base=$(tr -dc '0-9' < "${SEEDFILE}")   # tolerate a truncated/corrupt file
+  file_base=${file_base:-0}
+fi
+
+ledger_floor=0
+[ "${ledger_max}" -gt 0 ] && ledger_floor=$(( ledger_max + EA_SEED_GAP ))
+
+SEED_BASE=${EA_SEED_START}
+[ "${file_base}"    -gt "${SEED_BASE}" ] && SEED_BASE=${file_base}
+[ "${ledger_floor}" -gt "${SEED_BASE}" ] && SEED_BASE=${ledger_floor}
+
+if [ "${ledger_floor}" -gt "${file_base}" ] && [ "${file_base}" -gt 0 ]; then
+  echo "note: counter file (${file_base}) is behind the ledger (max end"
+  echo "      ${ledger_max}); using ${SEED_BASE} instead."
+fi
+
+NEXT=$(( SEED_BASE + NJOBS + EA_SEED_GAP ))  # gap so ranges cannot overlap
 export SEED_BASE
 # NOTE: the counter is written only after a successful submission (below).
 # Advancing it first burns the range whenever submission fails.
@@ -75,6 +113,7 @@ if [ "${CAMPAIGN}" != "${EA_PROD_CAMPAIGN}" ]; then
   BANNER="   <-- NOT the production campaign"
 fi
 echo "=============================================================="
+echo " experiment : ${EA_EXPERIMENT}  (group ${EA_GROUP}${EA_ROLE:+, role ${EA_ROLE}})"
 echo " campaign   : ${CAMPAIGN}${BANNER}"
 echo " target     : ${TARGET_NAME} (${TARGET_PDG})"
 echo " jobs       : ${NJOBS} x ${NEVENTS} events = $(( NJOBS * NEVENTS )) total"
@@ -82,51 +121,100 @@ echo " seeds      : ${SEED_BASE} .. $(( SEED_BASE + NJOBS - 1 ))"
 echo " build      : ${GVERSION}  tune ${GTUNE}  Q2min ${Q2MIN_GEN}"
 echo " ROI        : Q2>${ROI_Q2} W>${ROI_W} ${ROI_NUMIN}<nu<${ROI_NUMAX}"
 echo " resources  : ${MEM}, ${DISK}, ${LIFETIME}"
+echo " outputs    : ${EA_SCRATCH}/\${GRID_USER}/${CAMPAIGN}/${TARGET_NAME}"
 echo " tarball    : ${TARBALL}"
 echo "=============================================================="
 
-if [ "${DRYRUN}" = "--dry-run" ]; then
-  echo "(dry run: nothing submitted, seed counter NOT advanced)"
-  exit 0
-fi
+# Existence checks are advisory on a dry run.
+DRY=0
+[ "${DRYRUN}" = "--dry-run" ] && DRY=1
 
 for f in "${TARBALL}" "${RUNSCRIPT}"; do
-  [ -f "${f}" ] || { echo "missing: ${f}"; exit 1; }
+  if [ ! -f "${f}" ]; then
+    if [ "${DRY}" -eq 1 ]; then
+      echo "note: ${f} does not exist (ignored on a dry run)"
+    else
+      echo "missing: ${f}"; exit 1
+    fi
+  fi
 done
 
 # The tarball was built against a specific GVERSION/GTUNE.  If the config has
 # moved on since, the job will look for a spline file that is not in there.
-if tar -tzf "${TARBALL}" | grep -qx "\./$(ea_spline_file)"; then
-  echo "tarball contains the expected spline: $(ea_spline_file)"
-else
-  echo "ERROR: ${TARBALL} does not contain $(ea_spline_file)"
-  echo "       The tarball is stale for this config. Rebuild it:"
-  echo "         ${EA_GRID}/make_tarball_eA.sh"
-  exit 1
+if [ -f "${TARBALL}" ]; then
+  # `set -e` aborts on a bare command that returns nonzero, so capture the
+  # status rather than letting it reach the shell.
+  tb_rc=0
+  ea_tarball_has_toplevel "${TARBALL}" "$(ea_spline_file)" || tb_rc=$?
+  case ${tb_rc} in
+    0)
+      echo "tarball contains the expected spline: $(ea_spline_file)"
+      ;;
+    2)
+      echo "ERROR: could not read ${TARBALL}"
+      echo "       Truncated or not a gzipped tar? Try: tar -tzf '${TARBALL}' | head"
+      [ "${DRY}" -eq 1 ] || exit 1
+      ;;
+    *)
+      echo "ERROR: ${TARBALL} has no top-level $(ea_spline_file)"
+      echo "       Config wants: GVERSION=${GVERSION} GTUNE=${GTUNE}"
+      echo "                     GLIST=${GLIST} PROBE=${PROBE}"
+      echo "       Top-level entries actually in the tarball:"
+      # `... | head` would SIGPIPE the upstream and, under set -e + pipefail,
+      # abort the script mid-diagnostic. Capture first, guard with || true.
+      tops=$(ea_tarball_toplevel "${TARBALL}" | head -20) || true
+      while IFS= read -r line; do
+        [ -n "${line}" ] && echo "         ${line}"
+      done <<< "${tops}"
+      echo "       Either rebuild it:  ${EA_GRID}/make_tarball_eA.sh"
+      echo "       or point the config at what is in there."
+      [ "${DRY}" -eq 1 ] || exit 1
+      ;;
+  esac
 fi
 
 if ! command -v jobsub_submit >/dev/null 2>&1; then
   echo "ERROR: jobsub_submit is not on PATH."
   echo "       Set up the client first, e.g.:  setup jobsub_client"
-  exit 1
+  [ "${DRY}" -eq 1 ] || exit 1
 fi
 
 # ------------------------------------------------------------------ submit
+# Built as an array so --dry-run can print the exact command.
+JOBSUB_ARGS=( -G "${EA_GROUP}" -N "${NJOBS}" )
+[ -n "${EA_ROLE}" ] && JOBSUB_ARGS+=( --role="${EA_ROLE}" )
+JOBSUB_ARGS+=(
+  --memory="${MEM}" --disk="${DISK}" --expected-lifetime="${LIFETIME}" --cpu=1
+  --resource-provides=usage_model="${EA_USAGE_MODEL}"
+  --tar_file_name=dropbox://"${TARBALL}"
+  -l "+SingularityImage=\"${EA_SINGULARITY_IMAGE}\""
+  --append_condor_requirements="${EA_CONDOR_REQS}"
+  -e GFAL_PLUGIN_DIR=/usr/lib64/gfal2-plugins
+  -e GFAL_CONFIG_DIR=/etc/gfal2.d
+  -e UPS_OVERRIDE="-H Linux64bit+3.10-2.17"
+  # experiment profile the worker needs: grid_setup.sh reads EA_EXPERIMENT and
+  # EA_CVMFS_SETUP, run_grid_eA.sh reads EA_SCRATCH to build its output path
+  -e EA_EXPERIMENT -e EA_CVMFS_SETUP -e EA_SCRATCH
+  # physics + campaign
+  -e CAMPAIGN -e TARGET_PDG -e TARGET_NAME -e BEAM_E -e NEVENTS
+  -e SEED_BASE -e GTUNE -e GVERSION -e GLIST -e PROBE -e Q2MIN_GEN
+  -e ROI_Q2 -e ROI_W -e ROI_NUMIN -e ROI_NUMAX
+  file://"${RUNSCRIPT}"
+)
+
+if [ "${DRY}" -eq 1 ]; then
+  echo
+  echo "--- command that would be issued ---"
+  echo "jobsub_submit"
+  printf '    %s\n' "${JOBSUB_ARGS[@]}"
+  echo
+  echo "(dry run: nothing submitted, seed counter NOT advanced)"
+  exit 0
+fi
+
 SUBMIT_LOG=$(mktemp)
 set +e
-jobsub_submit -G uboone -N "${NJOBS}" \
-  --memory="${MEM}" --disk="${DISK}" --expected-lifetime="${LIFETIME}" --cpu=1 \
-  --resource-provides=usage_model=DEDICATED,OPPORTUNISTIC \
-  --tar_file_name=dropbox://"${TARBALL}" \
-  -l '+SingularityImage="/cvmfs/singularity.opensciencegrid.org/fermilab/fnal-dev-sl7:latest"' \
-  --append_condor_requirements='(TARGET.HAS_Singularity==true&&TARGET.HAS_CVMFS_larsoft_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser1_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser2_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser3_opensciencegrid_org==true&&TARGET.HAS_CVMFS_fifeuser4_opensciencegrid_org==true)' \
-  -e GFAL_PLUGIN_DIR=/usr/lib64/gfal2-plugins \
-  -e GFAL_CONFIG_DIR=/etc/gfal2.d \
-  -e UPS_OVERRIDE="-H Linux64bit+3.10-2.17" \
-  -e CAMPAIGN -e TARGET_PDG -e TARGET_NAME -e BEAM_E -e NEVENTS \
-  -e SEED_BASE -e GTUNE -e GVERSION -e GLIST -e PROBE -e Q2MIN_GEN \
-  -e ROI_Q2 -e ROI_W -e ROI_NUMIN -e ROI_NUMAX \
-  file://"${RUNSCRIPT}" 2>&1 | tee "${SUBMIT_LOG}"
+jobsub_submit "${JOBSUB_ARGS[@]}" 2>&1 | tee "${SUBMIT_LOG}"
 RC=${PIPESTATUS[0]}
 set -e
 

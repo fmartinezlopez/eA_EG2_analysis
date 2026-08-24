@@ -23,7 +23,7 @@ set -euo pipefail
 # ------------------------------------------------------------------ config
 EA_QUIET=1
 # shellcheck disable=SC1091
-. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/source.sh"
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/setup.sh"
 
 GEN="${EA_GENIE_TOP}/Generator"
 SPLINE="$(ea_spline_path)"
@@ -147,18 +147,15 @@ tar -tzf "${OUT}" | awk -F/ '{print $2}' | sort -u | head -20 | sed 's/^/   /'
 echo "=============================================================="
 echo
 echo "Files the grid job expects at \$INPUT_TAR_DIR_LOCAL:"
-LIST=$(mktemp)
-tar -tzf "${OUT}" > "${LIST}"
 missing=0
 for f in grid_setup.sh "$(basename "${SPLINE}")" MANIFEST; do
-  if grep -qx "\./${f}" "${LIST}"; then
+  if ea_tarball_has_toplevel "${OUT}" "${f}"; then
     echo "   OK   ${f}"
   else
     echo "   MISS ${f}  <-- job will fail"
     missing=1
   fi
 done
-rm -f "${LIST}"
 
 rm -rf tar_state
 

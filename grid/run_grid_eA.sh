@@ -13,9 +13,12 @@
 #
 # This script does NOT source setup.sh: on the worker node the only environment
 # is what grid_setup.sh builds plus what jobsub forwarded with -e.  Everything
-# below is supplied by launch_job_eA.sh, which reads it from source.sh.
+# below is supplied by launch_job_eA.sh, which reads it from setup.sh.
 #
 # Expected environment (exported by launch_job_eA.sh via jobsub -e):
+#   EA_EXPERIMENT   uboone | dune -- selects the grid_setup.sh branch
+#   EA_CVMFS_SETUP  bootstrap script grid_setup.sh sources
+#   EA_SCRATCH      /pnfs base for outputs
 #   CAMPAIGN     e.g. eA_prod_v1
 #   TARGET_PDG   e.g. 1000060120
 #   TARGET_NAME  e.g. C12
@@ -33,7 +36,8 @@ echo "=== $(date -u) : running on $(hostname) at ${GLIDEIN_Site} ==="
 
 # ------------------------------------------------------------------ config
 MISSING=""
-for v in CAMPAIGN TARGET_PDG TARGET_NAME BEAM_E NEVENTS SEED_BASE \
+for v in EA_EXPERIMENT EA_CVMFS_SETUP EA_SCRATCH \
+         CAMPAIGN TARGET_PDG TARGET_NAME BEAM_E NEVENTS SEED_BASE \
          GTUNE GVERSION Q2MIN_GEN PROBE GLIST \
          ROI_Q2 ROI_W ROI_NUMIN ROI_NUMAX; do
   if [ -z "${!v}" ]; then
@@ -47,13 +51,14 @@ if [ -n "${MISSING}" ]; then
 fi
 
 echo "--- job configuration ---"
-for v in CAMPAIGN TARGET_NAME TARGET_PDG BEAM_E NEVENTS SEED_BASE \
+for v in EA_EXPERIMENT EA_SCRATCH CAMPAIGN TARGET_NAME TARGET_PDG BEAM_E NEVENTS SEED_BASE \
          GVERSION GTUNE GLIST PROBE Q2MIN_GEN \
          ROI_Q2 ROI_W ROI_NUMIN ROI_NUMAX; do
   printf '  %-12s = %s\n' "${v}" "${!v}"
 done
 
-OUTDIR=/pnfs/uboone/scratch/users/${GRID_USER}/${CAMPAIGN}/${TARGET_NAME}
+# EA_SCRATCH is the experiment's /pnfs base, forwarded by launch_job_eA.sh.
+OUTDIR=${EA_SCRATCH}/${GRID_USER}/${CAMPAIGN}/${TARGET_NAME}
 echo "Output directory set to ${OUTDIR}"
 
 pwd
