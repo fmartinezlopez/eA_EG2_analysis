@@ -1,0 +1,82 @@
+# ============================================================================
+#  eA-vA EG2 analysis
+# ============================================================================
+
+# --- per-machine settings ---------------------------------------------------
+# Sourced by source.sh if present. Paths here are specific to one machine and
+# one user, so they must never be committed.
+config.local.sh
+
+# --- grid build artefacts ---------------------------------------------------
+# Multi-GB, contains a whole GENIE tree, fully regenerable by make_tarball_eA.sh.
+# The MANIFEST inside each tarball records the git SHA that built it, which is
+# the reproducible record -- the tarball itself does not need to be in git.
+grid/*.tar.gz
+grid/tar_state/
+
+# --- mutable seed cache -----------------------------------------------------
+# Safe to ignore ONLY because launch_job_eA.sh derives its floor from
+# seed_ledger.txt as well. Do not ignore this without that logic in place, or
+# a fresh clone will restart at EA_SEED_START and duplicate events.
+grid/.seed_counter
+
+# --- submission scratch -----------------------------------------------------
+grid/*.log
+grid/submit_*.txt
+grid/jobsub_*.log
+.jobsub/
+
+# --- analysis output --------------------------------------------------------
+output/
+plots/
+*.root
+*.ghep.root
+*.gst.root
+*.provenance.json
+filter.log
+
+# --- GENIE / ROOT build leftovers -------------------------------------------
+# Compiled ROOT macros and dictionaries, if any macro gets run from the repo.
+*_C.so
+*_C.d
+*_C.pcm
+*_cxx.so
+*_cxx.d
+*_cxx.pcm
+*.pcm
+AutoDict_*
+*.o
+*.a
+*.so
+*.d
+
+# GENIE messenger/config copies pulled in for local testing
+Messenger_*.xml.local
+
+# --- python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+*.egg-info/
+
+# --- LaTeX / notes ----------------------------------------------------------
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.toc
+*.out
+
+# --- editors and OS ---------------------------------------------------------
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+core.[0-9]*

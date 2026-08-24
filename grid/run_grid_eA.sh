@@ -11,7 +11,11 @@
 # of events GENERATED, which is not recoverable from a filtered file and is
 # required for any absolute normalisation.
 #
-# Expected environment (exported by launch_job.sh via jobsub -e):
+# This script does NOT source setup.sh: on the worker node the only environment
+# is what grid_setup.sh builds plus what jobsub forwarded with -e.  Everything
+# below is supplied by launch_job_eA.sh, which reads it from source.sh.
+#
+# Expected environment (exported by launch_job_eA.sh via jobsub -e):
 #   CAMPAIGN     e.g. eA_prod_v1
 #   TARGET_PDG   e.g. 1000060120
 #   TARGET_NAME  e.g. C12
@@ -21,26 +25,33 @@
 #   GTUNE        e.g. G18_10a_00_000
 #   GVERSION     e.g. v3_06_02-q2min0p8 (build tag, for bookkeeping)
 #   Q2MIN_GEN    Q2 floor compiled into this GENIE build, e.g. 0.80
+#   PROBE        PDG code of the beam particle, e.g. 11
+#   GLIST        event generator list, e.g. EM
 #   ROI_Q2 / ROI_W / ROI_NUMIN / ROI_NUMAX   filter thresholds
 
 echo "=== $(date -u) : running on $(hostname) at ${GLIDEIN_Site} ==="
 
 # ------------------------------------------------------------------ config
-: "${CAMPAIGN:=eA_test}"
-: "${TARGET_PDG:=1000060120}"
-: "${TARGET_NAME:=C12}"
-: "${BEAM_E:=5.014}"
-: "${NEVENTS:=500000}"
-: "${SEED_BASE:=1000000}"
-: "${GTUNE:=G18_10a_00_000}"
-: "${GVERSION:=unknown}"
-: "${Q2MIN_GEN:=0.8}"
-: "${ROI_Q2:=0.9}"
-: "${ROI_W:=1.9}"
-: "${ROI_NUMIN:=2.2}"
-: "${ROI_NUMAX:=4.3}"
-: "${PROBE:=11}"
-: "${GLIST:=EM}"
+MISSING=""
+for v in CAMPAIGN TARGET_PDG TARGET_NAME BEAM_E NEVENTS SEED_BASE \
+         GTUNE GVERSION Q2MIN_GEN PROBE GLIST \
+         ROI_Q2 ROI_W ROI_NUMIN ROI_NUMAX; do
+  if [ -z "${!v}" ]; then
+    MISSING="${MISSING} ${v}"
+  fi
+done
+if [ -n "${MISSING}" ]; then
+  echo "ERROR: required variables not forwarded by jobsub:${MISSING}"
+  echo "       launch_job_eA.sh must pass each one with -e."
+  exit 1
+fi
+
+echo "--- job configuration ---"
+for v in CAMPAIGN TARGET_NAME TARGET_PDG BEAM_E NEVENTS SEED_BASE \
+         GVERSION GTUNE GLIST PROBE Q2MIN_GEN \
+         ROI_Q2 ROI_W ROI_NUMIN ROI_NUMAX; do
+  printf '  %-12s = %s\n' "${v}" "${!v}"
+done
 
 OUTDIR=/pnfs/uboone/scratch/users/${GRID_USER}/${CAMPAIGN}/${TARGET_NAME}
 echo "Output directory set to ${OUTDIR}"

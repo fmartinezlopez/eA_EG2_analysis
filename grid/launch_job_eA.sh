@@ -13,6 +13,14 @@
 # SEEDS: every submission draws a fresh SEED_BASE from a counter file and
 # appends to a log. Seeds derived from $PROCESS alone repeat across
 # submissions, which silently duplicates events.
+#
+# CONFIG: everything comes from ../setup.sh -- there is no copy of the
+# version tag or tune in this file any more.  For a production run:
+#
+#   export CAMPAIGN=eA_prod_v1 && ./launch_job_eA.sh C12 1120
+#
+# The default campaign is the TEST one, so a bare invocation cannot land in the
+# production directory by accident.
 
 set -euo pipefail
 
@@ -20,62 +28,39 @@ TARGET_NAME="${1:-}"
 NJOBS="${2:-100}"
 DRYRUN="${3:-}"
 
+# ------------------------------------------------------------------ config
+EA_QUIET=1
+# shellcheck disable=SC1091
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/source.sh"
+
 if [ -z "${TARGET_NAME}" ]; then
-  echo "usage: $0 <D2|C12|Fe56|Pb208> <njobs> [--dry-run]"; exit 1
+  echo "usage: $0 <$(echo ${EA_TARGETS} | tr ' ' '|')> <njobs> [--dry-run]"; exit 1
 fi
 
-# ------------------------------------------------------------------ campaign
-# Overridable so a machinery test cannot land in the production directory:
-#   CAMPAIGN=eA_test ./launch_job_eA.sh C12 2
-: "${CAMPAIGN:=eA_prod_v1}"
-export CAMPAIGN
-export GVERSION="v3_06_02-q2min0p8"      # must match the tarball's GENIE build
-export GTUNE="G18_10a_00_000"
-export GLIST="EM"
-export PROBE="11"
-export BEAM_E="5.014"
-export Q2MIN_GEN="0.8"
+TARGET_PDG="$(ea_target_pdg "${TARGET_NAME}")" || {
+  echo "unknown target ${TARGET_NAME} (known: ${EA_TARGETS})"; exit 1; }
+export TARGET_NAME TARGET_PDG
 
-export ROI_Q2="0.9"
-export ROI_W="1.9"
-export ROI_NUMIN="2.2"
-export ROI_NUMAX="4.3"
-
-# Overridable for test runs:  NEVENTS=50000 CAMPAIGN=... ./launch_job_eA.sh C12 2
-: "${NEVENTS:=500000}"
-export NEVENTS
-
-GRIDDIR=/exp/uboone/app/users/fmlopez/generators/eA_EG2_analysis/grid
-TARBALL=${GRIDDIR}/ProdBooNE.tar.gz
-RUNSCRIPT=${GRIDDIR}/run_grid_eA.sh
-SEEDFILE=${GRIDDIR}/.seed_counter
-SEEDLOG=${GRIDDIR}/seed_ledger.txt
-
-# Defaults are sized for NEVENTS=500000. Heavier nuclei cascade more, so they
-# get longer lifetimes; Pb is roughly 3x slower per event than C.
-case "${TARGET_NAME}" in
-  D2)    export TARGET_PDG=1000010020; DEF_LIFE="2h";  DEF_MEM="2500MB" ;;
-  C12)   export TARGET_PDG=1000060120; DEF_LIFE="2h";  DEF_MEM="2500MB" ;;
-  Fe56)  export TARGET_PDG=1000260560; DEF_LIFE="3h";  DEF_MEM="3000MB" ;;
-  Pb208) export TARGET_PDG=1000822080; DEF_LIFE="4h"; DEF_MEM="3500MB" ;;
-  *) echo "unknown target ${TARGET_NAME}"; exit 1 ;;
-esac
-export TARGET_NAME
-LIFETIME="${LIFETIME:-${DEF_LIFE}}"
-MEM="${MEM:-${DEF_MEM}}"
+# Resources are per-target defaults from source.sh, still overridable ad hoc.
+LIFETIME="${LIFETIME:-$(ea_target_lifetime "${TARGET_NAME}")}"
+MEM="${MEM:-$(ea_target_memory "${TARGET_NAME}")}"
 
 # Disk: the raw ghep dominates and is only deleted at the end of the job, so the
 # worker needs raw + filtered + gst simultaneously, plus the unpacked tarball
-# (~0.5-0.9 GB).
-# Scales with NEVENTS; ~3 kB/event raw is the pessimistic case.
+# (~0.5-0.9 GB).  Scales with NEVENTS; ~3 kB/event raw is the pessimistic case.
 #   50k  -> ~1.2 GB peak   -> 3GB
-#   500k -> ~2.8 GB peak   -> 6GB
+#   500k -> ~2.8 GB peak   -> 4GB
 if [ "${NEVENTS}" -le 100000 ]; then
   DEF_DISK="3GB"
 else
   DEF_DISK="4GB"
 fi
 DISK="${DISK:-${DEF_DISK}}"
+
+TARBALL="${EA_TARBALL}"
+RUNSCRIPT="${EA_RUNSCRIPT}"
+SEEDFILE="${EA_SEEDFILE}"
+SEEDLOG="${EA_SEEDLOG}"
 
 # ------------------------------------------------------------------ seeds
 [ -f "${SEEDFILE}" ] || echo 1000000 > "${SEEDFILE}"
@@ -86,7 +71,7 @@ export SEED_BASE
 # Advancing it first burns the range whenever submission fails.
 
 BANNER=""
-if [ "${CAMPAIGN}" != "eA_prod_v1" ]; then
+if [ "${CAMPAIGN}" != "${EA_PROD_CAMPAIGN}" ]; then
   BANNER="   <-- NOT the production campaign"
 fi
 echo "=============================================================="
@@ -95,7 +80,9 @@ echo " target     : ${TARGET_NAME} (${TARGET_PDG})"
 echo " jobs       : ${NJOBS} x ${NEVENTS} events = $(( NJOBS * NEVENTS )) total"
 echo " seeds      : ${SEED_BASE} .. $(( SEED_BASE + NJOBS - 1 ))"
 echo " build      : ${GVERSION}  tune ${GTUNE}  Q2min ${Q2MIN_GEN}"
+echo " ROI        : Q2>${ROI_Q2} W>${ROI_W} ${ROI_NUMIN}<nu<${ROI_NUMAX}"
 echo " resources  : ${MEM}, ${DISK}, ${LIFETIME}"
+echo " tarball    : ${TARBALL}"
 echo "=============================================================="
 
 if [ "${DRYRUN}" = "--dry-run" ]; then
@@ -106,6 +93,17 @@ fi
 for f in "${TARBALL}" "${RUNSCRIPT}"; do
   [ -f "${f}" ] || { echo "missing: ${f}"; exit 1; }
 done
+
+# The tarball was built against a specific GVERSION/GTUNE.  If the config has
+# moved on since, the job will look for a spline file that is not in there.
+if tar -tzf "${TARBALL}" | grep -qx "\./$(ea_spline_file)"; then
+  echo "tarball contains the expected spline: $(ea_spline_file)"
+else
+  echo "ERROR: ${TARBALL} does not contain $(ea_spline_file)"
+  echo "       The tarball is stale for this config. Rebuild it:"
+  echo "         ${EA_GRID}/make_tarball_eA.sh"
+  exit 1
+fi
 
 if ! command -v jobsub_submit >/dev/null 2>&1; then
   echo "ERROR: jobsub_submit is not on PATH."
@@ -151,9 +149,10 @@ rm -f "${SUBMIT_LOG}"
 # The ledger is the only record tying a seed range to a cluster. Without it,
 # a resubmission after a partial failure can silently reuse seeds.
 {
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${CAMPAIGN}" "${TARGET_NAME}" \
-    "${CLUSTER:-unknown}" "${SEED_BASE}" "$(( SEED_BASE + NJOBS - 1 ))" "${NEVENTS}"
+    "${CLUSTER:-unknown}" "${SEED_BASE}" "$(( SEED_BASE + NJOBS - 1 ))" \
+    "${NEVENTS}" "${GVERSION}" "${GTUNE}"
 } >> "${SEEDLOG}"
 
 echo "seed range logged to ${SEEDLOG}"

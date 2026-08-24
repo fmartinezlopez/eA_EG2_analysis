@@ -2,7 +2,7 @@
 #
 # Build the grid tarball for the eA production.
 #
-#   ./make_tarball_eA.sh
+#   ./make_tarball_eA.sh [extra files to include...]
 #
 # Validates BEFORE tarring that the things the grid job needs are actually
 # present and consistent: the gfilterroi binary, the Q2 constant compiled into
@@ -12,80 +12,65 @@
 # Also writes a MANIFEST recording the git state of the GENIE fork. The rsync
 # excludes hidden files (so .git is dropped), which means the tarball otherwise
 # carries no record of which commit built it.
+#
+# All configuration comes from ../setup.sh. Override per-invocation with
+# exported variables, or permanently in config.local.sh:
+#
+#   export GTUNE=G18_02a_00_000 && ./make_tarball_eA.sh
 
 set -euo pipefail
 
 # ------------------------------------------------------------------ config
-GENIE_TOP=/exp/uboone/app/users/fmlopez/generators/genie
-GRIDDIR=/exp/uboone/app/users/fmlopez/generators/eA_EG2_analysis/grid
-SETUP=${GRIDDIR}/grid_setup.sh
-SPLINEDIR=/exp/uboone/app/users/fmlopez/generators/eA_EG2_analysis/input
+EA_QUIET=1
+# shellcheck disable=SC1091
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/source.sh"
 
-# MUST match launch_job_eA.sh exactly, character for character
-GVERSION="v3_06_02-q2min0p8"
-GTUNE="G18_10a_00_000"
-GLIST="EM"
-PROBE="11"
-EXPECT_Q2MIN="0.80"
-
-SPLINE=${SPLINEDIR}/${PROBE}_ALL_${GLIST}_${GVERSION}_${GTUNE}.xml
-OUT=${GRIDDIR}/ProdBooNE.tar.gz
-
-GEN=${GENIE_TOP}/Generator
+GEN="${EA_GENIE_TOP}/Generator"
+SPLINE="$(ea_spline_path)"
+OUT="${EA_TARBALL}"
+SETUP="${EA_GRID_SETUP}"
 
 echo "=============================================================="
 echo " GENIE tree : ${GEN}"
 echo " version tag: ${GVERSION}"
 echo " tune       : ${GTUNE}"
+echo " tarball    : ${OUT}"
 echo "=============================================================="
 echo
 
 # ------------------------------------------------------------ pre-flight
 fail=0
 
-for b in gevgen gntpc gfilterroi gmkspl; do
-  if [ -x "${GEN}/bin/${b}" ]; then
-    echo "  OK   bin/${b}"
-  else
-    echo "  MISS bin/${b}   <-- build it before tarring"
-    fail=1
-  fi
-done
+# Checks $GENIE, the four binaries, and ROOT.  Non-fatal here so that the rest
+# of the pre-flight still runs and reports everything in one pass.
+ea_check_genie || fail=1
 
 # The Q2 floor is a compile-time constant. If the source does not carry the
-# value the launcher advertises, the splines and events disagree with the
-# provenance record and nothing downstream is trustworthy.
-KU=${GEN}/src/Framework/Utils/KineUtils.h
-if [ -f "${KU}" ]; then
-  got=$(grep -oE 'kMinQ2Limit[^;]*=[^;]*' "${KU}" | head -1 | grep -oE '[0-9]+\.?[0-9]*' | tail -1 || true)
-  # compare numerically: '0.80' and '0.8' are the same number
-  same=$(awk -v a="${got:-nan}" -v b="${EXPECT_Q2MIN}" \
-           'BEGIN{ if (a+0==b+0 && a!="nan") print "yes"; else print "no" }')
-  if [ "${same}" = "yes" ]; then
-    echo "  OK   electromagnetic::kMinQ2Limit = ${got}"
-  else
-    echo "  WARN KineUtils.h reports '${got}', expected '${EXPECT_Q2MIN}'"
-    echo "       Check by hand; the grep is heuristic."
-  fi
-else
-  echo "  WARN ${KU} not found, cannot verify Q2 floor"
-fi
+# value the config advertises, the splines and events disagree with the
+# provenance record and nothing downstream is trustworthy.  Heuristic grep, so
+# a mismatch warns rather than blocks.
+ea_check_q2min || true
 
 if [ -s "${SPLINE}" ]; then
-  echo "  OK   splines $(basename "${SPLINE}") ($(du -h "${SPLINE}" | cut -f1))"
+  echo "  OK    splines $(basename "${SPLINE}") ($(du -h "${SPLINE}" | cut -f1))"
 else
-  echo "  MISS ${SPLINE}"
-  echo "       Available in ${SPLINEDIR}:"
-  ls -1 "${SPLINEDIR}"/*.xml 2>/dev/null | sed 's/^/         /' || echo "         (none)"
-  echo "       The name must match GVERSION and GTUNE exactly."
+  echo "  MISS  ${SPLINE}"
+  echo "        Available in ${EA_SPLINEDIR}:"
+  ls -1 "${EA_SPLINEDIR}"/*.xml 2>/dev/null | sed 's/^/          /' || echo "          (none)"
+  echo "        The name must match GVERSION and GTUNE exactly."
   fail=1
 fi
 
-[ -f "${SETUP}" ] && echo "  OK   ${SETUP}" || { echo "  MISS ${SETUP}"; fail=1; }
+if [ -f "${SETUP}" ]; then
+  echo "  OK    ${SETUP}"
+else
+  echo "  MISS  ${SETUP}"
+  fail=1
+fi
 
 # the job sources ${INPUT_TAR_DIR_LOCAL}/grid_setup.sh by that exact name
 [ "$(basename "${SETUP}")" = "grid_setup.sh" ] || {
-  echo "  ERR  setup script must be named grid_setup.sh (job sources it by name)"
+  echo "  ERR   setup script must be named grid_setup.sh (job sources it by name)"
   fail=1; }
 
 if [ "${fail}" -ne 0 ]; then
@@ -101,6 +86,13 @@ if [ -d "${GEN}/.git" ]; then
   git -C "${GEN}" diff --quiet 2>/dev/null || GITDIRTY=" (UNCOMMITTED CHANGES PRESENT)"
 fi
 
+# The analysis repo's own state matters too: it is what produced this config.
+ANADESC="unknown"; ANADIRTY=""
+if [ -d "${EA_ROOT}/.git" ]; then
+  ANADESC=$(git -C "${EA_ROOT}" describe --tags --always --dirty 2>/dev/null || echo unknown)
+  git -C "${EA_ROOT}" diff --quiet 2>/dev/null || ANADIRTY=" (UNCOMMITTED CHANGES PRESENT)"
+fi
+
 rm -rf tar_state && mkdir tar_state
 
 cat > tar_state/MANIFEST <<EOF
@@ -109,25 +101,29 @@ built_by         : $(whoami)@$(hostname)
 genie_tree       : ${GEN}
 git_describe     : ${GITDESC}${GITDIRTY}
 git_sha          : ${GITSHA}
+analysis_repo    : ${EA_ROOT}
+analysis_describe: ${ANADESC}${ANADIRTY}
 version_tag      : ${GVERSION}
 tune             : ${GTUNE}
 generator_list   : ${GLIST}
-q2min_compiled   : ${EXPECT_Q2MIN}
+probe            : ${PROBE}
+beam_energy_gev  : ${BEAM_E}
+q2min_compiled   : ${Q2MIN_GEN}
 spline_file      : $(basename "${SPLINE}")
 spline_md5       : $(md5sum "${SPLINE}" | cut -d' ' -f1)
 EOF
 
 echo "--- MANIFEST ---"; cat tar_state/MANIFEST; echo
 
-if [ -n "${GITDIRTY}" ]; then
-  echo "WARNING: the GENIE fork has uncommitted changes. The tarball will not be"
+if [ -n "${GITDIRTY}" ] || [ -n "${ANADIRTY}" ]; then
+  echo "WARNING: there are uncommitted changes. The tarball will not be"
   echo "         reproducible from git. Commit before a production run."
   echo
 fi
 
 # ------------------------------------------------------------ assemble
 echo "copying GENIE tree (this takes a few minutes)..."
-rsync -a --exclude=".*" "${GENIE_TOP}" ./tar_state
+rsync -a --exclude=".*" "${EA_GENIE_TOP}" ./tar_state
 
 cp "${SETUP}"  ./tar_state/
 cp "${SPLINE}" ./tar_state/
@@ -139,8 +135,8 @@ for var in "$@"; do
 done
 
 echo "creating ${OUT} ..."
-( cd tar_state && tar -zcf ProdBooNE.tar.gz ./* )
-mv tar_state/ProdBooNE.tar.gz "${OUT}"
+( cd tar_state && tar -zcf "$(basename "${OUT}")" ./* )
+mv "tar_state/$(basename "${OUT}")" "${OUT}"
 
 echo
 echo "=============================================================="
