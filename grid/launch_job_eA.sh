@@ -55,7 +55,7 @@ MEM="${MEM:-$(ea_target_memory "${TARGET_NAME}")}"
 if [ "${NEVENTS}" -le 100000 ]; then
   DEF_DISK="3GB"
 else
-  DEF_DISK="4GB"
+  DEF_DISK="6GB"
 fi
 DISK="${DISK:-${DEF_DISK}}"
 

@@ -216,9 +216,9 @@ ea_target_pdg() {
 
 ea_target_lifetime() {
   case "${1:-}" in
-    D2|C12) echo "2h" ;;
-    Fe56)   echo "3h" ;;
-    Pb208)  echo "4h" ;;
+    D2|C12) echo "4h" ;;
+    Fe56)   echo "6h" ;;
+    Pb208)  echo "6h" ;;
     *)      return 1 ;;
   esac
 }
