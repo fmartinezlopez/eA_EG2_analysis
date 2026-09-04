@@ -35,6 +35,20 @@ plots/
 *.provenance.json
 filter.log
 
+# --- generated tables -------------------------------------------------------
+# Everything the pipeline writes is a CSV. Ignore the type and re-admit inputs
+# below.
+*.csv
+ 
+# The CLAS measurements. Transcribed by hand from the papers and not reproducible
+# by running anything, so they are inputs, not output.
+!data/clas_eg2_*.csv
+ 
+# --- generated figures ------------------------------------------------------
+# Overlays and scan summaries, all regenerable from the CSVs.
+*.pdf
+*.png
+
 # --- GENIE / ROOT build leftovers -------------------------------------------
 # Compiled ROOT macros and dictionaries, if any macro gets run from the repo.
 *_C.so
