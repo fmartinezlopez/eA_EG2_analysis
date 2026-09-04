@@ -14,10 +14,28 @@ if [ ! -d "$WORKDIR" ]; then
   export WORKDIR=`echo .`
 fi
 
-: "${EA_EXPERIMENT:=uboone}"
-: "${EA_CVMFS_SETUP:=/cvmfs/uboone.opensciencegrid.org/products/setup_uboone_mcc9.sh}"
+# NO DEFAULT.  A launcher that forgets to forward these via jobsub -e would
+# otherwise get a silently wrong environment.
+if [ -z "${EA_EXPERIMENT}" ] || [ -z "${EA_CVMFS_SETUP}" ]; then
+  echo "ERROR: EA_EXPERIMENT and/or EA_CVMFS_SETUP are not set."
+  echo "       They are forwarded from the submitting shell by jobsub -e."
+  echo "       Check that the launcher exports them AND lists them:"
+  echo "           export EA_EXPERIMENT EA_CVMFS_SETUP"
+  echo "           jobsub_submit ... -e EA_EXPERIMENT -e EA_CVMFS_SETUP ..."
+  echo "       EA_EXPERIMENT='${EA_EXPERIMENT}'  EA_CVMFS_SETUP='${EA_CVMFS_SETUP}'"
+  return 1 2>/dev/null || exit 1
+fi
 
 echo "grid_setup: experiment=${EA_EXPERIMENT}"
+echo "grid_setup: bootstrap =${EA_CVMFS_SETUP}"
+
+# The two must agree. Pointing EA_EXPERIMENT at one experiment while the
+# bootstrap script belongs to another gets a product list that cannot resolve.
+case "${EA_CVMFS_SETUP}" in
+  *"/${EA_EXPERIMENT}."*|*"/${EA_EXPERIMENT}/"*) ;;
+  *) echo "WARNING: EA_CVMFS_SETUP does not mention '${EA_EXPERIMENT}'."
+     echo "         Check the profile in setup.sh -- these should match." ;;
+esac
 
 if [ ! -e "${EA_CVMFS_SETUP}" ]; then
   echo "ERROR: bootstrap script not found: ${EA_CVMFS_SETUP}"
@@ -94,4 +112,17 @@ export GENIE_REWEIGHT=${BASE_DIR}/genie/Reweight
 export PATH=${GENIE}/bin:${GENIE_REWEIGHT}/bin:$PATH
 export LD_LIBRARY_PATH=${GENIE}/lib:${GENIE_REWEIGHT}/lib:${LD_LIBRARY_PATH}
 export LIBRARY_PATH=${LIBRARY_PATH}:${GENIE_REWEIGHT}/lib
-echo "GENIE setup is ready!"
+# Confirm the environment is the one that was asked for.
+echo "grid_setup: ROOT      = $(root-config --version 2>/dev/null || echo MISSING)"
+echo "grid_setup: GENIE     = ${GENIE}"
+for _b in gfsireplay gntpc; do
+  if command -v "${_b}" >/dev/null 2>&1; then
+    echo "grid_setup: ${_b} -> $(command -v ${_b})"
+  else
+    echo "ERROR: ${_b} not on PATH after setup -- the tarball or the product"
+    echo "       list is wrong for EA_EXPERIMENT=${EA_EXPERIMENT}."
+    return 1 2>/dev/null || exit 1
+  fi
+done
+unset _b
+echo "Ready!"

@@ -69,7 +69,7 @@ fi
 : "${EA_GENIE_TOP:=$(dirname "${EA_ROOT}")/genie}"
 
 # Grid artefacts
-: "${EA_TARBALL:=${EA_GRID}/ProdBooNE.tar.gz}"
+: "${EA_TARBALL:=${EA_GRID}/ProdEA.tar.gz}"
 : "${EA_RUNSCRIPT:=${EA_GRID}/run_grid_eA.sh}"
 : "${EA_GRID_SETUP:=${EA_GRID}/grid_setup.sh}"
 : "${EA_SEEDFILE:=${EA_GRID}/.seed_counter}"
@@ -358,6 +358,140 @@ ea_check_q2min() {
   echo "  WARN  KineUtils.h reports '${got}', config says Q2MIN_GEN=${Q2MIN_GEN}"
   echo "        Check by hand; the grep is heuristic."
   return 1
+}
+
+# ------------------------------------------------------------------ analysis
+# The EG2 analysis chain: the compiled counts binary, the published CLAS
+# tables it reads its BINNING from, and the per-target input lists the scan
+# jobs index into.
+: "${EA_ANALYSIS:=${EA_ROOT}/analysis}"
+: "${EA_DATA:=${EA_ROOT}/data}"
+: "${EA_LISTDIR:=${EA_GRID}/lists}"
+export EA_ANALYSIS EA_DATA EA_LISTDIR
+
+# EG2Analysis loads its fill grid out of these four files, check explicitly.
+EA_CLAS_CSVS="clas_eg2_charged_pion_multiplicity_ratios_Moran_PRC105_015201.csv
+clas_eg2_neutral_pion_multiplicity_ratios_Mineeva_PRC112_035203.csv
+clas_eg2_dipion_correlations_Paul_PRC111_035201.csv
+clas_eg2_pion_proton_correlations_Paul_2512_05083.csv"
+export EA_CLAS_CSVS
+
+# ------------------------------------------------------------------ scan campaign
+# Replay jobs are a different campaign from generation, keep separate
+: "${EA_SCAN_TARBALL:=${EA_GRID}/ScanEA.tar.gz}"
+: "${EA_SCAN_RUNSCRIPT:=${EA_GRID}/run_scan_eA.sh}"
+: "${EA_SCAN_LEDGER:=${EA_GRID}/scan_ledger.txt}"
+: "${EA_SCAN_CAMPAIGN:=scan_test}"
+export EA_SCAN_TARBALL EA_SCAN_RUNSCRIPT EA_SCAN_LEDGER EA_SCAN_CAMPAIGN
+
+# Replay physics defaults.  SCAN_SEED is deliberately ONE value shared by every
+# parameter point.
+: "${STAGE:=fsi}"
+: "${SCAN_SEED:=101}"
+: "${FZ_CT0PION:=0.342}"
+: "${FZ_CT0NUC:=2.300}"
+: "${FZ_KPT2:=0.0}"
+export STAGE SCAN_SEED FZ_CT0PION FZ_CT0NUC FZ_KPT2
+
+# ROI events per input file: a 500k-event job filtered by gfilterroi keeps ~30%.
+# Used only to estimate job lifetimes.
+: "${EA_EV_PER_FILE:=150000}"
+export EA_EV_PER_FILE
+
+# ------------------------------------------------------------------ target maps
+# EG2Analysis wants the label that appears in the `target` column of the
+# published CSVs, which is NOT the production directory name.
+ea_target_label() {
+  case "${1:-}" in
+    D2)    echo D  ;;
+    C12)   echo C  ;;
+    Fe56)  echo Fe ;;
+    Pb208) echo Pb ;;
+    *)     return 1 ;;
+  esac
+}
+
+# Measured replay cost, milliseconds per ROI event (scan_timing.py).
+ea_target_mspe() {
+  case "${1:-}" in
+    D2)    echo 0.97 ;;
+    C12)   echo 1.02 ;;
+    Fe56)  echo 2.04 ;;
+    Pb208) echo 3.49 ;;
+    *)     return 1 ;;
+  esac
+}
+
+# ------------------------------------------------------------------ file lists
+# One job = one input file x ALL parameter values, so the list length IS the
+# job count.  Computed in one place so the tarball and the launcher cannot
+# disagree about how many jobs there should be.
+ea_filelist_file() { echo "filelist_${1}.txt"; }
+ea_filelist_path() { echo "${EA_LISTDIR}/$(ea_filelist_file "$1")"; }
+
+ea_filelist_count() {
+  local f
+  f="$(ea_filelist_path "${1}")"
+  [ -s "${f}" ] || { echo 0; return 1; }
+  grep -vc '^[[:space:]]*\(#.*\)\?$' "${f}"
+}
+
+# ------------------------------------------------------------------ scan checks
+# Returns 0 if the analysis side is ready to be tarred up, 1 otherwise.
+ea_check_analysis() {
+  local ok=0 f
+  # The worker has no rootcling and the source tree may be read-only, so the
+  # COMPILED binary is required
+  if [ -x "${EA_ANALYSIS}/eg2analysis" ]; then
+    echo "  OK    eg2analysis binary"
+  else
+    echo "  MISS  ${EA_ANALYSIS}/eg2analysis"
+    echo "        run 'make' in ${EA_ANALYSIS} -- ACLiC will not work on a worker"
+    ok=1
+  fi
+  for f in ${EA_CLAS_CSVS}; do
+    if [ -s "${EA_DATA}/${f}" ]; then
+      echo "  OK    data/$(echo "${f}" | cut -c1-52)..."
+    else
+      echo "  MISS  ${EA_DATA}/${f}"
+      ok=1
+    fi
+  done
+  return ${ok}
+}
+
+ea_check_filelists() {
+  local ok=0 t n
+  for t in ${EA_TARGETS}; do
+    if n=$(ea_filelist_count "${t}"); then
+      echo "  OK    $(ea_filelist_file "${t}") (${n} files -> ${n} jobs)"
+      if head -1 "$(ea_filelist_path "${t}")" | grep -q '^root://'; then
+        echo "        NOTE  xrootd URLs need a valid token on the worker."
+        echo "              Plain /pnfs paths are copied by ifdh without one."
+      fi
+    else
+      echo "  MISS  $(ea_filelist_path "${t}")"
+      ok=1
+    fi
+  done
+  return ${ok}
+}
+
+# ------------------------------------------------------------------ scan sizing
+# Minutes per job = ROI events x ms/event x number of values, plus a fixed
+# allowance for stage-in, the counts pass and copyback.
+ea_scan_minutes() {   # target nvalues
+  local mspe
+  mspe="$(ea_target_mspe "${1}")" || return 1
+  awk -v e="${EA_EV_PER_FILE}" -v m="${mspe}" -v n="${2:-1}" \
+      'BEGIN{ printf "%.0f", e*m/1000/60*n + 5 }'
+}
+
+# Whole hours with ~4x headroom, floored at 2h.
+ea_scan_lifetime() {  # target nvalues
+  local min
+  min="$(ea_scan_minutes "${1}" "${2}")" || return 1
+  awk -v m="${min}" 'BEGIN{ h=int(m*4/60)+1; if(h<2)h=2; printf "%dh", h }'
 }
 
 # ------------------------------------------------------------------ PATH

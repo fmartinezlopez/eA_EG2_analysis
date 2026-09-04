@@ -1,0 +1,12 @@
+2026-09-02T21:28:53Z	eA_test	C12	93571020.0@jobsub02.fnal.gov	fz-ct0pion	0.1,0.2,0.342,0.6,1.0	99	101
+2026-09-02T22:14:00Z	eA_test	D2	93571159.0@jobsub02.fnal.gov	fz-ct0pion	0.1,0.2,0.342,0.6,1.0	440	101
+2026-09-02T22:17:47Z	eA_test	Fe56	93571160.0@jobsub02.fnal.gov	fz-ct0pion	0.1,0.2,0.342,0.6,1.0	125	101
+2026-09-02T22:35:17Z	eA_test	Pb208	71819200.0@jobsub03.fnal.gov	fz-ct0pion	0.1,0.2,0.342,0.6,1.0	60	101
+2026-09-03T16:29:22Z	eA_test	C12	30085777.0@jobsub05.fnal.gov	fz-ct0pion	0.03,0.05,0.07	99	101
+2026-09-03T16:31:18Z	eA_test	D2	30085778.0@jobsub05.fnal.gov	fz-ct0pion	0.03,0.05,0.07	440	101
+2026-09-03T16:32:38Z	eA_test	Fe56	71834325.0@jobsub03.fnal.gov	fz-ct0pion	0.03,0.05,0.07	125	101
+2026-09-03T16:37:25Z	eA_test	Pb208	93581367.0@jobsub02.fnal.gov	fz-ct0pion	0.03,0.05,0.07	60	101
+2026-09-03T17:59:02Z	eA_test	C12	71835271.0@jobsub03.fnal.gov	fz-ct0pion	0.03,0.05,0.07	99	101
+2026-09-03T19:52:00Z	eA_test	D2	93583392.0@jobsub02.fnal.gov	fz-ct0pion	0.03,0.05,0.07	440	101
+2026-09-03T20:04:22Z	eA_test	Fe56	30088146.0@jobsub05.fnal.gov	fz-ct0pion	0.03,0.05,0.07	125	101
+2026-09-03T20:15:26Z	eA_test	Pb208	30088237.0@jobsub05.fnal.gov	fz-ct0pion	0.03,0.05,0.07	60	101
