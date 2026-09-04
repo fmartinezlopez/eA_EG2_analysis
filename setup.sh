@@ -367,7 +367,8 @@ ea_check_q2min() {
 : "${EA_ANALYSIS:=${EA_ROOT}/analysis}"
 : "${EA_DATA:=${EA_ROOT}/data}"
 : "${EA_LISTDIR:=${EA_GRID}/lists}"
-export EA_ANALYSIS EA_DATA EA_LISTDIR
+: "${EA_SCAN:=${EA_ROOT}/scan}"
+export EA_ANALYSIS EA_DATA EA_LISTDIR EA_SCAN
 
 # EG2Analysis loads its fill grid out of these four files, check explicitly.
 EA_CLAS_CSVS="clas_eg2_charged_pion_multiplicity_ratios_Moran_PRC105_015201.csv
